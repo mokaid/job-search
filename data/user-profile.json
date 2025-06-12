@@ -1,0 +1,66 @@
+{
+  "name": "Fouad Dbouk",
+  "title": "AI Engineer & Data Scientist | Technical Project Manager",
+  "skills": [
+    "TensorFlow",
+    "Deep learning models",
+    "Multimedia processing",
+    "NLP",
+    "Predictive analytics",
+    "MERN stack",
+    "MongoDB",
+    "Express",
+    "React",
+    "Node.js",
+    "RESTful APIs",
+    "JavaScript",
+    "Agile methodologies",
+    "Project planning",
+    "Team management",
+    "Risk mitigation",
+    "CI/CD pipelines",
+    "Data transformation",
+    "Statistical analysis",
+    "Feature engineering",
+    "Data visualization",
+    "Sklearn",
+    "Numpy",
+    "Pandas",
+    "Docker",
+    "Kubernetes",
+    "AWS (Redshift, S3, Glue)",
+    "Python",
+    "Keras",
+    "SQL",
+    "Jenkins",
+    "GitLab"
+  ],
+  "experience_years": 18,
+  "preferred_job_titles": [
+    "AI Engineer",
+    "Data Scientist",
+    "Technical Project Manager",
+    "Full Stack Developer",
+    "Tech Lead",
+    "Machine Learning Engineer"
+  ],
+  "preferred_locations": [
+    "Dubai, UAE",
+    "Abu Dhabi, UAE"
+  ],
+  "key_strengths": [
+    "Strong blend of technical and managerial skills",
+    "Expertise in AI, machine learning, and TensorFlow",
+    "Experience with full-stack web development and DevOps",
+    "Proven leadership in managing Agile cross-functional teams",
+    "Building and deploying scalable AI-driven applications",
+    "Hands-on knowledge of cloud services and CI/CD pipelines",
+    "Ability to integrate AI capabilities with enterprise solutions",
+    "Multilingual and effective communication across global teams"
+  ],
+  "salary_range": {
+    "min": 90000,
+    "max": 140000
+  },
+  "last_updated": 1749760855586
+}

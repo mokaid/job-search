@@ -1,0 +1,28 @@
+[
+  {
+    "session_id": "session_1749748355417_lceffog0t",
+    "start_time": 1749748355417,
+    "end_time": 1749748693822,
+    "applications_submitted": 0,
+    "total_actions": 10,
+    "success_rate": 1,
+    "objectives_completed": [],
+    "duration": 338405,
+    "session_duration": 142887,
+    "llm_calls": 11,
+    "average_decision_time": 68
+  },
+  {
+    "session_id": "session_1749768159081_6j5rkipam",
+    "start_time": 1749768159081,
+    "end_time": 1749768202535,
+    "applications_submitted": 0,
+    "total_actions": 1,
+    "success_rate": 2,
+    "objectives_completed": [],
+    "duration": 43454,
+    "session_duration": 13452,
+    "llm_calls": 2,
+    "average_decision_time": 6183
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "bot": {
+    "screenshotInterval": 30000,
+    "maxApplications": 50,
+    "debugMode": false
+  },
+  "mouse": {
+    "movement": {
+      "baseSpeed": 8,
+      "jitterIntensity": 1.5
+    },
+    "bezier": {
+      "curvature": 0.3,
+      "randomness": 0.2
+    }
+  },
+  "typing": {
+    "wpm": 45,
+    "errorRate": 0.02
+  }
+}
