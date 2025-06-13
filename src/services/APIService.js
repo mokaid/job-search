@@ -1,4 +1,4 @@
-// src/services/APIService.js - OCR for screenshots, LLM for text-only tasks
+// src/services/APIService.js - Fixed version with coordinate correction
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const fs = require('fs').promises;
@@ -7,8 +7,8 @@ class APIService {
     constructor(config) {
         this.config = config;
         this.resumeURL = config.env.RESUME_ANALYSIS_URL;
-        this.llmURL = config.env.LLM_SERVICE_URL;     // For text-only tasks
-        this.ocrURL = config.env.OCR_SERVICE_URL;     // For screenshot analysis
+        this.llmURL = config.env.LLM_SERVICE_URL;
+        this.ocrURL = config.env.OCR_SERVICE_URL;
         
         // API call statistics
         this.stats = {
@@ -20,195 +20,229 @@ class APIService {
         };
     }
 
-    // Main decision endpoint - USES OCR SERVICE FOR SCREENSHOTS
-// Complete getNextAction method with N8N output wrapper fix
-async getNextAction(payload) {
-    const startTime = Date.now();
-    
-    try {
-        console.log('👁️ Sending screenshot to OCR service for analysis...');
-        
-        // Create FormData to send screenshot to OCR service
-        const formData = new FormData();
-        
-        // Add screenshot file
-        if (payload.screenshot_path && await this.fileExists(payload.screenshot_path)) {
-            const screenshotBuffer = await fs.readFile(payload.screenshot_path);
-            formData.append('screenshot', screenshotBuffer, {
-                filename: 'screenshot.png',
-                contentType: 'image/png'
-            });
-            console.log(`📷 Screenshot file: ${payload.screenshot_path} (${screenshotBuffer.length} bytes)`);
-        } else {
-            throw new Error('Screenshot file not found or not provided');
+    // Enhanced coordinate validation and correction
+    validateAndCorrectCoordinates(decision) {
+        if (!decision.x_percentage || !decision.y_percentage) {
+            return decision;
         }
-        
-        // Add all context data as JSON
-        const contextData = {
-            current_objective: payload.current_objective,
-            user_profile: payload.user_profile,
-            session_context: payload.session_context,
-            previous_actions: payload.previous_actions || [],
-            screen_info: payload.screen_info,
-            bot_capabilities: this.getBotCapabilities(),
-            safety_constraints: this.getSafetyConstraints(),
-            timestamp: Date.now(),
-            request_type: 'get_next_action',
-            analysis_type: 'screenshot_to_action'
+
+        // Known LinkedIn element positions
+        const linkedInElements = {
+            'jobs_tab': { x_percent: 0.21, y_percent: 0.05 },
+            'home_tab': { x_percent: 0.17, y_percent: 0.05 },
+            'network_tab': { x_percent: 0.19, y_percent: 0.05 },
+            'messaging_tab': { x_percent: 0.23, y_percent: 0.05 },
+            'notifications_tab': { x_percent: 0.25, y_percent: 0.05 },
+            'search_bar': { x_percent: 0.11, y_percent: 0.05 }
         };
-        
-        formData.append('data', JSON.stringify(contextData));
 
-        console.log(`🔗 Calling OCR service: ${this.ocrURL}`);
-        console.log(`📊 Session context: ${payload.session_context?.applications_submitted || 0} applications submitted`);
-        console.log(`🎯 Current objective: ${payload.current_objective}`);
-        
-        const response = await fetch(this.ocrURL, {
-            method: 'POST',
-            body: formData,
-            headers: {
-                ...formData.getHeaders(),
-                'User-Agent': 'LinkedIn-Job-Bot/1.0'
-            },
-            timeout: 45000
-        });
+        // Detect if this is likely a Jobs tab click based on reasoning
+        const isJobsClick = decision.reasoning.toLowerCase().includes('jobs') || 
+                           decision.reasoning.toLowerCase().includes('job search') ||
+                           decision.reasoning.toLowerCase().includes('job tab') ||
+                           decision.next_objective?.includes('jobs');
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`OCR Service HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+        // Detect if this is navigation bar interaction (y_percentage < 0.2)
+        const isNavigation = decision.y_percentage < 0.2;
+
+        // Apply corrections
+        if (isJobsClick && isNavigation) {
+            console.log('🔧 COORDINATE CORRECTION: Detected Jobs tab click');
+            console.log(`   Original: ${(decision.x_percentage * 100).toFixed(1)}%, ${(decision.y_percentage * 100).toFixed(1)}%`);
+            
+            // Use known Jobs tab coordinates
+            decision.x_percentage = linkedInElements.jobs_tab.x_percent;
+            decision.y_percentage = linkedInElements.jobs_tab.y_percent;
+            decision.corrected_coordinates = true;
+            
+            console.log(`   Corrected: ${(decision.x_percentage * 100).toFixed(1)}%, ${(decision.y_percentage * 100).toFixed(1)}%`);
         }
 
-        // Parse the response text first to handle \n characters
-        const responseText = await response.text();
-        console.log('📥 Raw N8N Response (length:', responseText.length, '):', responseText);
-        console.log('📥 Response as bytes:', Buffer.from(responseText).toString('hex'));
-        
-        let decision;
-        try {
-            // Try direct JSON parse first
-            decision = JSON.parse(responseText);
-            console.log('✅ Direct JSON parse successful');
-            
-            // Handle N8N output wrapper - THIS IS THE KEY FIX!
-            if (decision.output) {
-                console.log('🔧 Found N8N output wrapper, parsing inner JSON...');
-                try {
-                    const innerDecision = JSON.parse(decision.output);
-                    console.log('✅ Inner JSON parsed successfully:', innerDecision);
-                    decision = innerDecision; // Replace the wrapper with the actual decision
-                } catch (innerParseError) {
-                    console.error('❌ Failed to parse inner JSON:', innerParseError.message);
-                    console.error('📄 Inner JSON:', decision.output);
-                    throw new Error('Could not parse inner JSON from N8N output field');
-                }
-            }
-            
-        } catch (directParseError) {
-            console.log('❌ Direct parse failed:', directParseError.message);
-            
-            // Clean up the response text
-            let cleanedResponse = responseText.trim();
-            console.log('🧹 Trimmed response:', cleanedResponse);
-            
-            // Fix missing opening brace
-            if (cleanedResponse.startsWith(':\\n') || cleanedResponse.startsWith(': ')) {
-                cleanedResponse = '{' + cleanedResponse.substring(cleanedResponse.indexOf('"'));
-                console.log('🔧 Fixed opening brace:', cleanedResponse);
-            }
-            
-            // Replace escaped newlines
-            cleanedResponse = cleanedResponse.replace(/\\n/g, '').replace(/\n/g, '');
-            console.log('🧹 Cleaned newlines:', cleanedResponse);
-            
-            try {
-                decision = JSON.parse(cleanedResponse);
-                console.log('✅ Cleaned JSON parse successful');
-                
-                // Handle N8N output wrapper for cleaned response too
-                if (decision.output) {
-                    console.log('🔧 Found N8N output wrapper in cleaned response...');
-                    const innerDecision = JSON.parse(decision.output);
-                    console.log('✅ Inner JSON from cleaned response parsed:', innerDecision);
-                    decision = innerDecision;
-                }
-                
-            } catch (cleanParseError) {
-                console.log('❌ Cleaned parse failed:', cleanParseError.message);
-                
-                // Manual extraction as last resort
-                console.log('🔧 Attempting manual extraction...');
-                const actionMatch = responseText.match(/"action":\s*"([^"]+)"/);
-                const reasoningMatch = responseText.match(/"reasoning":\s*"([^"]+)"/);
-                const confidenceMatch = responseText.match(/"confidence":\s*([0-9.]+)/);
-                const xMatch = responseText.match(/"x_percentage":\s*([0-9.]+)/);
-                const yMatch = responseText.match(/"y_percentage":\s*([0-9.]+)/);
-                const objectiveMatch = responseText.match(/"next_objective":\s*"([^"]+)"/);
-                
-                console.log('🔍 Extracted matches:');
-                console.log('  action:', actionMatch ? actionMatch[1] : 'NOT FOUND');
-                console.log('  reasoning:', reasoningMatch ? reasoningMatch[1] : 'NOT FOUND');
-                console.log('  confidence:', confidenceMatch ? confidenceMatch[1] : 'NOT FOUND');
-                console.log('  x_percentage:', xMatch ? xMatch[1] : 'NOT FOUND');
-                console.log('  y_percentage:', yMatch ? yMatch[1] : 'NOT FOUND');
-                console.log('  next_objective:', objectiveMatch ? objectiveMatch[1] : 'NOT FOUND');
-                
-                if (actionMatch) {
-                    decision = {
-                        action: actionMatch[1],
-                        reasoning: reasoningMatch ? reasoningMatch[1] : 'No reasoning provided',
-                        confidence: confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.5,
-                        x_percentage: xMatch ? parseFloat(xMatch[1]) : undefined,
-                        y_percentage: yMatch ? parseFloat(yMatch[1]) : undefined,
-                        next_objective: objectiveMatch ? objectiveMatch[1] : undefined
-                    };
-                    console.log('🔧 Manually constructed decision:', decision);
-                } else {
-                    throw new Error('Could not extract action from response');
-                }
-            }
+        // General validation for navigation elements
+        if (isNavigation && decision.x_percentage > 0.5) {
+            console.log('⚠️  WARNING: Navigation click seems too far right, applying general correction');
+            // Most LinkedIn navigation elements are in the left 40% of the screen
+            decision.x_percentage = Math.min(decision.x_percentage, 0.4);
+            decision.corrected_coordinates = true;
         }
-        
-        console.log('✅ Parsed Decision BEFORE validation:', JSON.stringify(decision, null, 2));
-        
-        // Add metadata
-        decision.timestamp = Date.now();
-        decision.source = 'ocr_service';
-        decision.estimated_cost = decision.estimated_cost || 0;
-        
-        console.log('📋 Decision BEFORE validateDecisionResponse:', JSON.stringify(decision, null, 2));
-        
-        // Validate the decision structure
-        this.validateDecisionResponse(decision);
-        
-        console.log('📋 Decision AFTER validateDecisionResponse:', JSON.stringify(decision, null, 2));
-        
-        // Update statistics
-        this.updateStats(startTime, true, decision.estimated_cost);
-        
-        console.log(`✅ OCR Service Decision: ${decision.action} (confidence: ${decision.confidence})`);
-        console.log(`💭 Reasoning: ${decision.reasoning}`);
-        console.log(`📍 Coordinates: ${decision.x_percentage}, ${decision.y_percentage}`);
-        
+
         return decision;
-
-    } catch (error) {
-        this.updateStats(startTime, false);
-        console.error('❌ OCR Service Error:', error.message);
-        
-        // Emergency fallback
-        console.log('🚨 Using emergency fallback action...');
-        return {
-            action: "wait_and_observe",
-            reasoning: `OCR Service failed: ${error.message}. Taking safe fallback action.`,
-            confidence: 0.1,
-            wait_duration: 10000,
-            estimated_cost: 0,
-            timestamp: Date.now(),
-            source: 'emergency_fallback',
-            next_objective: payload.current_objective
-        };
     }
-}
+
+    // Main decision endpoint with coordinate correction
+    async getNextAction(payload) {
+        const startTime = Date.now();
+        
+        try {
+            console.log('👁️ Sending screenshot to OCR service for analysis...');
+            
+            // Create FormData to send screenshot to OCR service
+            const formData = new FormData();
+            
+            // Add screenshot file
+            if (payload.screenshot_path && await this.fileExists(payload.screenshot_path)) {
+                const screenshotBuffer = await fs.readFile(payload.screenshot_path);
+                formData.append('screenshot', screenshotBuffer, {
+                    filename: 'screenshot.png',
+                    contentType: 'image/png'
+                });
+                console.log(`📷 Screenshot file: ${payload.screenshot_path} (${screenshotBuffer.length} bytes)`);
+            } else {
+                throw new Error('Screenshot file not found or not provided');
+            }
+            
+            // Add all context data as JSON
+            const contextData = {
+                current_objective: payload.current_objective,
+                user_profile: payload.user_profile,
+                session_context: payload.session_context,
+                previous_actions: payload.previous_actions || [],
+                screen_info: payload.screen_info,
+                bot_capabilities: this.getBotCapabilities(),
+                safety_constraints: this.getSafetyConstraints(),
+                timestamp: Date.now(),
+                request_type: 'get_next_action',
+                analysis_type: 'screenshot_to_action'
+            };
+            
+            formData.append('data', JSON.stringify(contextData));
+
+            console.log(`🔗 Calling OCR service: ${this.ocrURL}`);
+            console.log(`📊 Session context: ${payload.session_context?.applications_submitted || 0} applications submitted`);
+            console.log(`🎯 Current objective: ${payload.current_objective}`);
+            
+            const response = await fetch(this.ocrURL, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    ...formData.getHeaders(),
+                    'User-Agent': 'LinkedIn-Job-Bot/1.0'
+                },
+                timeout: 45000
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`OCR Service HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+            }
+
+            // Parse the response
+            const responseText = await response.text();
+            console.log('📥 Raw API Response (length:', responseText.length, ')');
+            
+            let decision;
+            try {
+                // Try direct JSON parse first
+                decision = JSON.parse(responseText);
+                console.log('✅ Direct JSON parse successful');
+                
+                // Handle N8N output wrapper
+                if (decision.output) {
+                    console.log('🔧 Found N8N output wrapper, parsing inner JSON...');
+                    try {
+                        const innerDecision = JSON.parse(decision.output);
+                        console.log('✅ Inner JSON parsed successfully');
+                        decision = innerDecision; // Replace the wrapper with the actual decision
+                    } catch (innerParseError) {
+                        console.error('❌ Failed to parse inner JSON:', innerParseError.message);
+                        throw new Error('Could not parse inner JSON from N8N output field');
+                    }
+                }
+                
+            } catch (directParseError) {
+                console.log('❌ Direct parse failed:', directParseError.message);
+                
+                // Clean up the response text
+                let cleanedResponse = responseText.trim();
+                console.log('🧹 Attempting to clean response...');
+                
+                // Fix missing opening brace
+                if (cleanedResponse.startsWith(':\\n') || cleanedResponse.startsWith(': ')) {
+                    cleanedResponse = '{' + cleanedResponse.substring(cleanedResponse.indexOf('"'));
+                }
+                
+                // Replace escaped newlines
+                cleanedResponse = cleanedResponse.replace(/\\n/g, '').replace(/\n/g, '');
+                
+                try {
+                    decision = JSON.parse(cleanedResponse);
+                    console.log('✅ Cleaned JSON parse successful');
+                    
+                    // Handle N8N output wrapper for cleaned response too
+                    if (decision.output) {
+                        const innerDecision = JSON.parse(decision.output);
+                        decision = innerDecision;
+                    }
+                    
+                } catch (cleanParseError) {
+                    console.log('🔧 Attempting manual extraction...');
+                    const actionMatch = responseText.match(/"action":\s*"([^"]+)"/);
+                    const reasoningMatch = responseText.match(/"reasoning":\s*"([^"]+)"/);
+                    const confidenceMatch = responseText.match(/"confidence":\s*([0-9.]+)/);
+                    const xMatch = responseText.match(/"x_percentage":\s*([0-9.]+)/);
+                    const yMatch = responseText.match(/"y_percentage":\s*([0-9.]+)/);
+                    const objectiveMatch = responseText.match(/"next_objective":\s*"([^"]+)"/);
+                    
+                    if (actionMatch) {
+                        decision = {
+                            action: actionMatch[1],
+                            reasoning: reasoningMatch ? reasoningMatch[1] : 'No reasoning provided',
+                            confidence: confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.5,
+                            x_percentage: xMatch ? parseFloat(xMatch[1]) : undefined,
+                            y_percentage: yMatch ? parseFloat(yMatch[1]) : undefined,
+                            next_objective: objectiveMatch ? objectiveMatch[1] : undefined
+                        };
+                        console.log('🔧 Manually constructed decision');
+                    } else {
+                        throw new Error('Could not extract action from response');
+                    }
+                }
+            }
+            
+            console.log('📋 Decision BEFORE coordinate correction:', JSON.stringify(decision, null, 2));
+            
+            // Apply coordinate correction BEFORE validation
+            decision = this.validateAndCorrectCoordinates(decision);
+            
+            // Add metadata
+            decision.timestamp = Date.now();
+            decision.source = 'ocr_service';
+            decision.estimated_cost = decision.estimated_cost || 0;
+            
+            console.log('📋 Decision AFTER coordinate correction:', JSON.stringify(decision, null, 2));
+            
+            // Validate the decision structure
+            this.validateDecisionResponse(decision);
+            
+            // Update statistics
+            this.updateStats(startTime, true, decision.estimated_cost);
+            
+            console.log(`✅ OCR Service Decision: ${decision.action} (confidence: ${decision.confidence})`);
+            console.log(`💭 Reasoning: ${decision.reasoning}`);
+            if (decision.x_percentage !== undefined) {
+                console.log(`📍 Coordinates: ${(decision.x_percentage * 100).toFixed(1)}%, ${(decision.y_percentage * 100).toFixed(1)}%`);
+            }
+            
+            return decision;
+
+        } catch (error) {
+            this.updateStats(startTime, false);
+            console.error('❌ OCR Service Error:', error.message);
+            
+            // Emergency fallback
+            console.log('🚨 Using emergency fallback action...');
+            return {
+                action: "wait_and_observe",
+                reasoning: `OCR Service failed: ${error.message}. Taking safe fallback action.`,
+                confidence: 0.1,
+                wait_duration: 10000,
+                estimated_cost: 0,
+                timestamp: Date.now(),
+                source: 'emergency_fallback',
+                next_objective: payload.current_objective
+            };
+        }
+    }
 
     // Job analysis - ALSO USES OCR SERVICE (screenshots)
     async analyzeJobPosting(payload) {
@@ -337,60 +371,6 @@ async getNextAction(payload) {
         }
     }
 
-    // Cover letter generation - USES LLM SERVICE (text-only)
-    async generateCoverLetter(payload) {
-        try {
-            console.log('📄 Generating cover letter with LLM service...');
-            
-            const coverLetterPayload = {
-                job_info: payload.job_info,
-                user_profile: payload.user_profile,
-                company_info: payload.company_info || {},
-                cover_letter_type: payload.type || 'standard',
-                length_preference: payload.length || 'medium',
-                request_type: 'generate_cover_letter',
-                customization_level: 'high',
-                tone: 'professional_enthusiastic',
-                timestamp: Date.now()
-            };
-
-            const response = await fetch(this.llmURL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'LinkedIn-Job-Bot/1.0'
-                },
-                body: JSON.stringify(coverLetterPayload),
-                timeout: 30000
-            });
-
-            if (!response.ok) {
-                throw new Error(`LLM cover letter error: ${response.status}`);
-            }
-
-            const result = await response.json();
-            result.timestamp = Date.now();
-            result.source = 'llm_service';
-
-            console.log(`📝 Generated cover letter: ${result.word_count} words`);
-            
-            return result;
-
-        } catch (error) {
-            console.error('Cover Letter Error:', error.message);
-            // Fallback cover letter
-            const userProfile = payload.user_profile || {};
-            const jobInfo = payload.job_info || {};
-            
-            return {
-                cover_letter: `Dear Hiring Manager,\n\nI am writing to express my interest in the ${jobInfo.title || 'position'} role. As a ${userProfile.title || 'professional'} with experience in ${userProfile.skills?.slice(0, 2)?.join(' and ') || 'relevant technologies'}, I believe I would be a valuable addition to your team.\n\nThank you for your consideration.\n\nBest regards,\n${userProfile.name || 'Candidate'}`,
-                word_count: 50,
-                timestamp: Date.now(),
-                source: 'fallback_template'
-            };
-        }
-    }
-
     // Resume analysis - KEEP USING EXISTING RESUME WEBHOOK
     async analyzeResume() {
         try {
@@ -454,146 +434,6 @@ async getNextAction(payload) {
         } catch (error) {
             console.error('❌ Resume Analysis Error:', error.message);
             throw new Error(`Failed to analyze resume: ${error.message}`);
-        }
-    }
-
-    // OCR for specific image regions - USES OCR SERVICE
-    async performOCR(payload) {
-        try {
-            console.log('🔍 Performing OCR with OCR service...');
-            
-            const formData = new FormData();
-            
-            // Add image file if available
-            if (payload.image_path && await this.fileExists(payload.image_path)) {
-                const imageBuffer = await fs.readFile(payload.image_path);
-                formData.append('image', imageBuffer, {
-                    filename: 'ocr_image.png',
-                    contentType: 'image/png'
-                });
-            } else if (payload.image_base64) {
-                // Fallback to base64 for small OCR tasks
-                const ocrPayload = {
-                    image_base64: payload.image_base64,
-                    region: payload.region || null,
-                    language: payload.language || 'eng',
-                    request_type: 'perform_ocr',
-                    enhance_image: true,
-                    extract_structure: true,
-                    timestamp: Date.now()
-                };
-
-                const response = await fetch(this.ocrURL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'LinkedIn-Job-Bot/1.0'
-                    },
-                    body: JSON.stringify(ocrPayload),
-                    timeout: 20000
-                });
-
-                if (!response.ok) {
-                    throw new Error(`OCR error: ${response.status}`);
-                }
-
-                const result = await response.json();
-                result.timestamp = Date.now();
-                result.source = 'ocr_service';
-                
-                return result;
-            } else {
-                throw new Error('No image file or base64 provided for OCR');
-            }
-            
-            // File upload version
-            const ocrData = {
-                region: payload.region || null,
-                language: payload.language || 'eng',
-                request_type: 'perform_ocr',
-                enhance_image: true,
-                extract_structure: true,
-                timestamp: Date.now()
-            };
-            
-            formData.append('data', JSON.stringify(ocrData));
-
-            const response = await fetch(this.ocrURL, {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    ...formData.getHeaders(),
-                    'User-Agent': 'LinkedIn-Job-Bot/1.0'
-                },
-                timeout: 20000
-            });
-
-            if (!response.ok) {
-                throw new Error(`OCR error: ${response.status}`);
-            }
-
-            const result = await response.json();
-            result.timestamp = Date.now();
-            result.source = 'ocr_service';
-            
-            return result;
-
-        } catch (error) {
-            console.error('OCR Error:', error.message);
-            return { 
-                extracted_text: '', 
-                timestamp: Date.now(),
-                source: 'fallback',
-                note: 'OCR failed, returning empty result'
-            };
-        }
-    }
-
-    // Job match evaluation - USES LLM SERVICE (text-only)
-    async evaluateJobMatch(payload) {
-        try {
-            const matchPayload = {
-                job_info: payload.job_info,
-                user_profile: payload.user_profile,
-                request_type: 'evaluate_job_match',
-                matching_weights: {
-                    skills: 0.4,
-                    experience: 0.3,
-                    location: 0.2,
-                    salary: 0.1
-                },
-                strict_requirements: payload.strict_requirements || [],
-                timestamp: Date.now()
-            };
-
-            const response = await fetch(this.llmURL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'LinkedIn-Job-Bot/1.0'
-                },
-                body: JSON.stringify(matchPayload),
-                timeout: 15000
-            });
-
-            if (!response.ok) {
-                throw new Error(`LLM job match error: ${response.status}`);
-            }
-
-            const result = await response.json();
-            result.timestamp = Date.now();
-            result.source = 'llm_service';
-            
-            return result;
-
-        } catch (error) {
-            console.error('Job Match Error:', error.message);
-            return { 
-                match_score: 60, 
-                reasoning: 'Could not evaluate job match automatically',
-                timestamp: Date.now(),
-                source: 'fallback'
-            };
         }
     }
 

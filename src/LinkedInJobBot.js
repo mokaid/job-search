@@ -1,4 +1,4 @@
-// src/LinkedInJobBot.js - Main bot with LLM-driven decision making (File Upload Version)
+// src/LinkedInJobBot.js - Complete fixed version with dynamic screen resolution
 const robot = require('robotjs');
 const sharp = require('sharp');
 const fs = require('fs').promises;
@@ -31,6 +31,9 @@ class LinkedInJobBot {
         this.consecutiveErrors = 0;
         this.lastActionTime = Date.now();
         
+        // Screen dimensions (will be detected dynamically)
+        this.screenDimensions = null;
+        
         // Performance metrics
         this.metrics = {
             totalActions: 0,
@@ -44,6 +47,15 @@ class LinkedInJobBot {
         this.maxConsecutiveErrors = config.get('safety.emergencyStop.errorThreshold') || 5;
         this.maxSessionTime = config.get('bot.maxSessionTime') || 7200000;
         this.maxApplications = config.get('bot.maxApplications') || 50;
+    }
+
+    // Get actual screen dimensions
+    getActualScreenDimensions() {
+        if (!this.screenDimensions) {
+            this.screenDimensions = robot.getScreenSize();
+            console.log(`🖥️  Detected screen dimensions: ${this.screenDimensions.width} x ${this.screenDimensions.height}`);
+        }
+        return this.screenDimensions;
     }
 
     // Main bot lifecycle
@@ -70,6 +82,9 @@ class LinkedInJobBot {
     async initialize() {
         this.logger.info('Initializing bot components...');
         
+        // Detect screen dimensions
+        this.getActualScreenDimensions();
+        
         // Load user profile from resume
         this.userProfile = await this.apiService.analyzeResume();
         this.logger.info(`Profile loaded: ${this.userProfile.name} - ${this.userProfile.title}`);
@@ -77,14 +92,12 @@ class LinkedInJobBot {
         // Initialize job tracker
         await this.jobTracker.initialize();
         
-        // HARDCODE THIS TOO - Don't take initial screenshot
-        // const initialScreenshot = await this.screenshotManager.capture('initialization');
-        
+        // Use hardcoded screenshot for testing
         const initialScreenshot = {
             buffer: null,
-            width: 3456,
-            height: 2234,
-            filepath: './data/screenshots/action_0_1749764287747.png', // Same hardcoded file
+            width: this.screenDimensions.width,
+            height: this.screenDimensions.height,
+            filepath: './data/screenshots/action_0_1749764287747.png',
             timestamp: Date.now(),
             label: 'hardcoded_test'
         };
@@ -103,20 +116,15 @@ class LinkedInJobBot {
             const loopStartTime = Date.now();
             
             try {
-                // Take screenshot
-                this.logger.debug('Taking screenshot for analysis...');
-               // const screenshot = await this.screenshotManager.capture(`action_${this.metrics.totalActions}`);
-                
-
+                // Use hardcoded screenshot for testing
                 const screenshot = {
                     buffer: null,
-                    width: 3456,
-                    height: 2234,
-                    filepath: './data/screenshots/action_0_1749764287747.png', // 👈 Hardcoded test file
+                    width: this.screenDimensions.width,
+                    height: this.screenDimensions.height,
+                    filepath: './data/screenshots/action_0_1749764287747.png',
                     timestamp: Date.now(),
                     label: 'hardcoded_test'
                 };
-
                 
                 // Get LLM decision
                 this.logger.debug('Requesting LLM decision...');
@@ -151,7 +159,7 @@ class LinkedInJobBot {
         this.logger.info('Main execution loop completed');
     }
 
-    // Get decision from LLM based on current screenshot - UPDATED FOR FILE UPLOAD
+    // Get decision from LLM based on current screenshot
     async getLLMDecision(screenshot, objective = null) {
         const startTime = Date.now();
         
@@ -162,7 +170,7 @@ class LinkedInJobBot {
         
         try {
             const decision = await this.apiService.getNextAction({
-                screenshot_path: screenshot.filepath, // Pass file path instead of base64!
+                screenshot_path: screenshot.filepath,
                 current_objective: objective || this.currentObjective,
                 user_profile: this.userProfile,
                 session_context: this.getSessionContext(),
@@ -282,36 +290,46 @@ class LinkedInJobBot {
         }
     }
 
-    // Action execution methods
+    // FIXED: Execute click with dynamic screen resolution
     async executeClick(coordinates, decision) {
         console.log('🖱️ executeClick called');
         console.log('📍 Input coordinates:', coordinates);
         console.log('📊 Decision:', JSON.stringify(decision, null, 2));
         
+        // Get actual screen dimensions
+        const actualScreen = this.getActualScreenDimensions();
+        
+        // Add coordinate debugging with actual dimensions
+        this.debugCoordinates(decision, actualScreen.width, actualScreen.height);
+        
         // Handle percentage-based coordinates from Claude Vision
         let actualCoords = coordinates;
         
         if (decision.x_percentage !== undefined && decision.y_percentage !== undefined) {
-            // Convert percentages to actual screen coordinates
+            // Apply smart coordinate correction first
+            const correctedDecision = this.smartCoordinateCorrection(decision);
+            
+            // Convert corrected percentages to absolute coordinates using ACTUAL screen size
             actualCoords = {
-                x: Math.round(3456 * decision.x_percentage), // Use hardcoded dimensions
-                y: Math.round(2234 * decision.y_percentage)
+                x: Math.round(actualScreen.width * correctedDecision.x_percentage),
+                y: Math.round(actualScreen.height * correctedDecision.y_percentage)
             };
             
-            console.log(`🔄 Converted coordinates: ${decision.x_percentage * 100}%, ${decision.y_percentage * 100}% → (${actualCoords.x}, ${actualCoords.y})`);
-            this.logger.debug(`Converted coordinates: ${decision.x_percentage * 100}%, ${decision.y_percentage * 100}% → (${actualCoords.x}, ${actualCoords.y})`);
-        } else {
-            console.log('❌ No x_percentage/y_percentage found');
+            console.log(`🔄 Screen-adjusted coordinates: (${actualCoords.x}, ${actualCoords.y})`);
+            console.log(`   Using actual screen: ${actualScreen.width} x ${actualScreen.height}`);
+            
+            if (correctedDecision.corrected) {
+                console.log(`   Correction applied: ${correctedDecision.correction_reason}`);
+            }
         }
         
-        // UPDATED VALIDATION - Use screenshot dimensions instead of actual screen size
-        if (!this.validateCoordinatesForScreenshot(actualCoords, 3456, 2234)) {
-            console.log('❌ Invalid coordinates for screenshot dimensions:', actualCoords);
-            throw new Error(`Invalid coordinates for screenshot: (${actualCoords.x}, ${actualCoords.y}) - max: (3456, 2234)`);
+        // Validate coordinates against ACTUAL screen dimensions
+        if (!this.validateCoordinatesForActualScreen(actualCoords, actualScreen)) {
+            console.log('❌ Invalid coordinates for actual screen dimensions:', actualCoords);
+            throw new Error(`Invalid coordinates: (${actualCoords.x}, ${actualCoords.y}) for screen ${actualScreen.width}x${actualScreen.height}`);
         }
         
         console.log(`🖱️ About to click at (${actualCoords.x}, ${actualCoords.y})`);
-        this.logger.debug(`Clicking at (${actualCoords.x}, ${actualCoords.y})`);
         
         try {
             console.log('🔄 Moving mouse...');
@@ -329,6 +347,122 @@ class LinkedInJobBot {
         await this.sleep(waitTime);
     }
 
+    // FIXED: Smart coordinate correction with known LinkedIn elements
+    smartCoordinateCorrection(decision) {
+        const reasoning = decision.reasoning.toLowerCase();
+        const originalX = decision.x_percentage;
+        const originalY = decision.y_percentage;
+        
+        // Known LinkedIn navigation elements (percentages work for any screen size)
+        const knownElements = {
+            jobs: { x: 0.21, y: 0.05, keywords: ['jobs', 'job search', 'job tab', 'navigate to jobs'] },
+            home: { x: 0.17, y: 0.05, keywords: ['home', 'feed', 'home tab'] },
+            network: { x: 0.19, y: 0.05, keywords: ['network', 'my network', 'connections'] },
+            messaging: { x: 0.23, y: 0.05, keywords: ['messaging', 'messages', 'chat'] },
+            notifications: { x: 0.25, y: 0.05, keywords: ['notifications', 'alerts'] },
+            search: { x: 0.11, y: 0.05, keywords: ['search', 'search bar'] }
+        };
+        
+        // Check if reasoning matches any known elements
+        for (const [elementName, element] of Object.entries(knownElements)) {
+            for (const keyword of element.keywords) {
+                if (reasoning.includes(keyword)) {
+                    console.log(`🎯 SMART CORRECTION: Detected "${elementName}" element`);
+                    return {
+                        ...decision,
+                        x_percentage: element.x,
+                        y_percentage: element.y,
+                        corrected: true,
+                        correction_reason: `Detected "${elementName}" from reasoning: "${keyword}"`
+                    };
+                }
+            }
+        }
+        
+        // General corrections for navigation bar (top 20% of screen)
+        if (originalY < 0.2) {
+            // If it's in navigation area but X coordinate seems wrong
+            if (originalX > 0.5) {
+                console.log('🔧 GENERAL CORRECTION: Navigation element too far right');
+                return {
+                    ...decision,
+                    x_percentage: Math.min(originalX, 0.3), // Cap at 30% from left
+                    corrected: true,
+                    correction_reason: 'Navigation element was positioned too far right'
+                };
+            }
+        }
+        
+        return {
+            ...decision,
+            corrected: false
+        };
+    }
+
+    // FIXED: Validation method for actual screen
+    validateCoordinatesForActualScreen(coords, screenSize) {
+        if (!coords || typeof coords.x !== 'number' || typeof coords.y !== 'number') {
+            console.log('❌ Invalid coordinate structure:', coords);
+            return false;
+        }
+        
+        const isValid = coords.x >= 0 && coords.y >= 0 && 
+                       coords.x < screenSize.width && coords.y < screenSize.height;
+        
+        console.log(`🔍 Coordinate validation: (${coords.x}, ${coords.y}) vs screen: (${screenSize.width}, ${screenSize.height}) = ${isValid ? 'VALID' : 'INVALID'}`);
+        
+        return isValid;
+    }
+
+    // FIXED: Debug method with dynamic dimensions
+    debugCoordinates(decision, screenWidth, screenHeight) {
+        console.log('\n🔍 COORDINATE DEBUG:');
+        console.log('🖥️  Screen Resolution:', `${screenWidth} x ${screenHeight}`);
+        console.log('📊 LLM Decision:', {
+            action: decision.action,
+            reasoning: decision.reasoning,
+            confidence: decision.confidence,
+            x_percentage: decision.x_percentage,
+            y_percentage: decision.y_percentage
+        });
+        
+        if (decision.x_percentage !== undefined && decision.y_percentage !== undefined) {
+            const calculatedX = Math.round(screenWidth * decision.x_percentage);
+            const calculatedY = Math.round(screenHeight * decision.y_percentage);
+            
+            console.log('📍 Percentage Coordinates:', {
+                x_percent: `${(decision.x_percentage * 100).toFixed(1)}%`,
+                y_percent: `${(decision.y_percentage * 100).toFixed(1)}%`
+            });
+            
+            console.log('📍 Calculated Absolute Coordinates:', {
+                x: calculatedX,
+                y: calculatedY,
+                screen_width: screenWidth,
+                screen_height: screenHeight
+            });
+            
+            // Suggest coordinates for actual screen resolution
+            console.log('📍 Expected LinkedIn Element Coordinates (for your screen):');
+            console.log(`  Jobs Tab: ~(${Math.round(screenWidth * 0.21)}, ${Math.round(screenHeight * 0.05)}) or ~21% from left`);
+            console.log(`  Home Tab: ~(${Math.round(screenWidth * 0.17)}, ${Math.round(screenHeight * 0.05)}) or ~17% from left`); 
+            console.log(`  Search Bar: ~(${Math.round(screenWidth * 0.11)}, ${Math.round(screenHeight * 0.05)}) or ~11% from left`);
+            
+            // Validate if coordinates seem reasonable for actual screen
+            if (calculatedX > screenWidth * 0.8) {
+                console.log('⚠️  WARNING: X coordinate seems too far right for your screen!');
+                console.log('💡 Suggested fix: Try x_percentage around 0.21 for Jobs tab');
+            }
+            
+            if (calculatedY > screenHeight * 0.5) {
+                console.log('⚠️  WARNING: Y coordinate seems too low for navigation bar!');
+                console.log('💡 Suggested fix: Try y_percentage around 0.05-0.15 for navigation bar');
+            }
+        }
+        console.log(''); // Empty line for readability
+    }
+
+    // Execute typing action
     async executeTyping(text, coordinates, decision) {
         if (!text) {
             this.logger.warn('No text provided for typing action');
@@ -442,7 +576,6 @@ class LinkedInJobBot {
         this.currentObjective = 'find_next_job';
     }
 
-    // Updated job analysis method - uses file path
     async executeJobAnalysis(decision) {
         this.logger.debug('Job analysis suggested - executing click action instead');
         
@@ -597,7 +730,7 @@ class LinkedInJobBot {
 
     async simulateAttentionMovement() {
         const currentPos = robot.getMousePos();
-        const screenSize = robot.getScreenSize();
+        const screenSize = this.getActualScreenDimensions();
         
         // Generate 2-3 attention points around the screen
         const attentionPoints = [];
@@ -704,24 +837,9 @@ class LinkedInJobBot {
             return false;
         }
         
-        const screenSize = robot.getScreenSize();
+        const screenSize = this.getActualScreenDimensions();
         return coords.x >= 0 && coords.y >= 0 && 
                coords.x < screenSize.width && coords.y < screenSize.height;
-    }
-
-    // NEW METHOD: Validate coordinates for screenshot dimensions
-    validateCoordinatesForScreenshot(coords, maxWidth, maxHeight) {
-        if (!coords || typeof coords.x !== 'number' || typeof coords.y !== 'number') {
-            console.log('❌ Invalid coordinate structure:', coords);
-            return false;
-        }
-        
-        const isValid = coords.x >= 0 && coords.y >= 0 && 
-                       coords.x < maxWidth && coords.y < maxHeight;
-        
-        console.log(`🔍 Coordinate validation: (${coords.x}, ${coords.y}) vs max: (${maxWidth}, ${maxHeight}) = ${isValid ? 'VALID' : 'INVALID'}`);
-        
-        return isValid;
     }
 
     validateLLMDecision(decision) {
@@ -751,7 +869,8 @@ class LinkedInJobBot {
             current_objective: this.currentObjective,
             consecutive_errors: this.consecutiveErrors,
             total_actions: this.metrics.totalActions,
-            success_rate: this.metrics.successfulActions / Math.max(1, this.metrics.totalActions)
+            success_rate: this.metrics.successfulActions / Math.max(1, this.metrics.totalActions),
+            screen_resolution: `${this.screenDimensions?.width}x${this.screenDimensions?.height}`
         };
     }
 
@@ -781,7 +900,8 @@ class LinkedInJobBot {
             total_actions: this.metrics.totalActions,
             success_rate: this.metrics.successfulActions / Math.max(1, this.metrics.totalActions),
             llm_calls: this.metrics.llmCalls,
-            average_decision_time: this.metrics.averageDecisionTime
+            average_decision_time: this.metrics.averageDecisionTime,
+            screen_resolution: `${this.screenDimensions?.width}x${this.screenDimensions?.height}`
         });
         
         // Clean up old screenshots if needed
